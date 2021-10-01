@@ -39,7 +39,13 @@ func (s *ExecutionCacheStore) GetExecutionCache(executionCacheKey string, maxCac
 	if maxCacheStaleness == 0 {
 		return nil, fmt.Errorf("MaxCacheStaleness=0, Cache is disabled.")
 	}
+	retries := 0
 	r, err := s.db.Table("execution_caches").Where("ExecutionCacheKey = ?", executionCacheKey).Rows()
+	for retries < 5 && err != nil {
+		fmt.Println(fmt.Printf("Retrying cache query: %d", retries))
+		r, err = s.db.Table("execution_caches").Where("ExecutionCacheKey = ?", executionCacheKey).Rows()
+		retries += 1
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get execution cache: %q", executionCacheKey)
 	}
