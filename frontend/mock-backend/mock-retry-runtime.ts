@@ -61,7 +61,7 @@ export default {
             'sidecar.istio.io/inject': 'false',
           },
           labels: {
-            'pipelines.kubeflow.org/cache_enabled': 'true',
+            'pipelines.kubeflow.org/enable_caching': 'true',
             'pipelines.kubeflow.org/pipeline-sdk-type': 'kfp',
           },
         },
@@ -83,7 +83,7 @@ export default {
             'sidecar.istio.io/inject': 'false',
           },
           labels: {
-            'pipelines.kubeflow.org/cache_enabled': 'true',
+            'pipelines.kubeflow.org/enable_caching': 'true',
             'pipelines.kubeflow.org/pipeline-sdk-type': 'kfp',
           },
         },
@@ -108,7 +108,7 @@ export default {
             'sidecar.istio.io/inject': 'false',
           },
           labels: {
-            'pipelines.kubeflow.org/cache_enabled': 'true',
+            'pipelines.kubeflow.org/enable_caching': 'true',
             'pipelines.kubeflow.org/pipeline-sdk-type': 'kfp',
           },
         },
@@ -147,7 +147,7 @@ export default {
             'sidecar.istio.io/inject': 'false',
           },
           labels: {
-            'pipelines.kubeflow.org/cache_enabled': 'true',
+            'pipelines.kubeflow.org/enable_caching': 'true',
           },
         },
         name: 'retry-random-failures',

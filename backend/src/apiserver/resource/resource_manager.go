@@ -31,8 +31,8 @@ import (
 	"github.com/kubeflow/pipelines/backend/src/apiserver/archive"
 	kfpauth "github.com/kubeflow/pipelines/backend/src/apiserver/auth"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/client"
-	"github.com/kubeflow/pipelines/backend/src/apiserver/list"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/common"
+	"github.com/kubeflow/pipelines/backend/src/apiserver/list"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/storage"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
@@ -384,7 +384,7 @@ func (r *ResourceManager) CreateRun(ctx context.Context, apiRun *api.Run) (*mode
 
 	// Disable istio sidecar injection if not specified
 	workflow.SetAnnotationsToAllTemplatesIfKeyNotExist(util.AnnotationKeyIstioSidecarInject, util.AnnotationValueIstioSidecarInjectDisabled)
-	// Add a KFP specific label for cache service filtering. The cache_enabled flag here is a global control for whether cache server will
+	// Add a KFP specific label for cache service filtering. The enable_caching flag here is a global control for whether cache server will
 	// receive targeting pods. Since cache server only receives pods in step level, the resource manager here will set this global label flag
 	// on every single step/pod so the cache server can understand.
 	// TODO: Add run_level flag with similar logic by reading flag value from create_run api.

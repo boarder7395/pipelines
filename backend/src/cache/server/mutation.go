@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	KFPCacheEnabledLabelKey    string = "pipelines.kubeflow.org/cache_enabled"
+	KFPCacheEnabledLabelKey    string = "pipelines.kubeflow.org/enable_caching"
 	KFPCacheEnabledLabelValue  string = "true"
 	KFPCachedLabelKey          string = "pipelines.kubeflow.org/reused_from_cache"
 	KFPCachedLabelValue        string = "true"
