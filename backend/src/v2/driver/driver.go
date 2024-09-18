@@ -1346,7 +1346,17 @@ func resolveInputs(ctx context.Context, dag *metadata.DAG, iterationIndex *int, 
 						return nil, err
 					}
 					glog.V(4).Infof("Deserialized outputArtifacts: %v", outputArtifacts)
-					artifactSelectors := outputArtifacts["Output"].GetArtifactSelectors()
+					// Get keys of the output artifacts.
+					outputKeys := make([]string, len(outputArtifacts))
+					i := 0
+					for k := range outputArtifacts {
+						outputKeys[i] = k
+						i++
+					}
+					glog.V(4).Infof("outputKeys: %v", outputKeys)
+					// Get the artifact selector for the output artifact using the first outputKeys.
+					// TODO: Add support for multiple outputKeys.
+					artifactSelectors := outputArtifacts[outputKeys[0]].GetArtifactSelectors()
 					// TODO: Add support for multiple output artifacts.
 					subTaskName := artifactSelectors[0].ProducerSubtask
 					outputArtifactKey = artifactSelectors[0].OutputArtifactKey
