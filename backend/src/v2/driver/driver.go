@@ -1369,7 +1369,6 @@ type resolveUpstreamArtifactsConfig struct {
 // straightforward, or DAGs, in which case, we need to traverse the graph until
 // we arrive at a component/container (since there can be n nested DAGs).
 func resolveUpstreamArtifacts(cfg resolveUpstreamArtifactsConfig) error {
-	glog.V(4).Infof("artifactSpec: %#v", cfg.artifactSpec)
 	taskOutput := cfg.artifactSpec.GetTaskOutputArtifact()
 	if taskOutput.GetProducerTask() == "" {
 		return cfg.artifactError(fmt.Errorf("producer task is empty"))
