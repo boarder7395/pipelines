@@ -1011,6 +1011,60 @@ func getDAGTasks(
 	return flattenedTasks, nil
 }
 
+func parseDAGOutputs(tasks map[string]*metadata.Execution, currentTask *metadata.Execution, outputArtifactKey string, ctx context.Context) (map[int64]string, error) {
+	if *currentTask.GetExecution().Type != "system.DAGExecution" {
+		// Base case, subtask is a container, not a DAG.
+		// if outputArtifactKey == "" {
+		// 	glog.V(4).Infof("outputArtifactKey is empty", outputArtifactKey)
+		// 	return nil, fmt.Errorf("expected outputArtifactKey to be non-empty %v", *currentTask.GetExecution().Type)
+		// }
+		return map[int64]string{
+			currentTask.GetExecution().GetId(): outputArtifactKey,
+		}, nil
+	} else {
+		// Recursive case, subtask is a DAG.
+
+		// Get the output artifacts of the subtask.
+		glog.V(4).Infof("currentTask: %v", currentTask)
+		outputArtifactsCustomProperty := currentTask.GetExecution().GetCustomProperties()["output_artifacts"]
+		// Deserialize the output artifacts.
+		var outputArtifacts map[string]*pipelinespec.DagOutputsSpec_DagOutputArtifactSpec
+		err := json.Unmarshal([]byte(outputArtifactsCustomProperty.GetStringValue()), &outputArtifacts)
+		if err != nil {
+			return nil, err
+		}
+		glog.V(4).Infof("Deserialized outputArtifacts: %v", outputArtifacts)
+		// Get keys of the output artifacts.
+		outputKeys := make([]string, len(outputArtifacts))
+		i := 0
+		for k := range outputArtifacts {
+			outputKeys[i] = k
+			i++
+		}
+		glog.V(4).Infof("outputKeys: %v", outputKeys)
+		// Get the artifact selector for the output artifact using the first outputKeys.
+		// TODO: Add support for multiple outputKeys.
+		artifactSelectors := outputArtifacts[outputKeys[0]].GetArtifactSelectors()
+
+		// Add support for multiple output artifacts.
+		outputTaskMapping := make(map[int64]string)
+		for _, output := range artifactSelectors {
+			subTaskName := output.ProducerSubtask
+			nextSubTask := tasks[subTaskName]
+			outputArtifactKey := output.OutputArtifactKey
+			taskMapping, err := parseDAGOutputs(tasks, nextSubTask, outputArtifactKey, ctx)
+			if err != nil {
+				glog.V(4).Info("Failed to parseDAGOutputs: %v", err)
+				return nil, err
+			}
+			for k, v := range taskMapping {
+				outputTaskMapping[k] = v
+			}
+		}
+		return outputTaskMapping, nil
+	}
+}
+
 func resolveInputs(ctx context.Context, dag *metadata.DAG, iterationIndex *int, pipeline *metadata.Pipeline, task *pipelinespec.PipelineTaskSpec, inputsSpec *pipelinespec.ComponentInputsSpec, mlmd *metadata.Client, expr *expression.Expr) (inputs *pipelinespec.ExecutorInput_Inputs, err error) {
 	defer func() {
 		if err != nil {
@@ -1331,62 +1385,31 @@ func resolveInputs(ctx context.Context, dag *metadata.DAG, iterationIndex *int, 
 			}
 			glog.V(4).Info("producer: ", producer)
 			currentTask := producer
-			var outputArtifactKey string
-			currentSubTaskMaybeDAG := true
-			for currentSubTaskMaybeDAG {
-				// If the current task is a DAG:
-				glog.V(4).Info("currentTask: ", currentTask.TaskName())
-				if *currentTask.GetExecution().Type == "system.DAGExecution" {
-					// Get the sub-task.
-					outputArtifactsCustomProperty := currentTask.GetExecution().GetCustomProperties()["output_artifacts"]
-					// Deserialize the output artifacts.
-					var outputArtifacts map[string]*pipelinespec.DagOutputsSpec_DagOutputArtifactSpec
-					err := json.Unmarshal([]byte(outputArtifactsCustomProperty.GetStringValue()), &outputArtifacts)
-					if err != nil {
-						return nil, err
-					}
-					glog.V(4).Infof("Deserialized outputArtifacts: %v", outputArtifacts)
-					// Get keys of the output artifacts.
-					outputKeys := make([]string, len(outputArtifacts))
-					i := 0
-					for k := range outputArtifacts {
-						outputKeys[i] = k
-						i++
-					}
-					glog.V(4).Infof("outputKeys: %v", outputKeys)
-					// Get the artifact selector for the output artifact using the first outputKeys.
-					// TODO: Add support for multiple outputKeys.
-					artifactSelectors := outputArtifacts[outputKeys[0]].GetArtifactSelectors()
-					// TODO: Add support for multiple output artifacts.
-					subTaskName := artifactSelectors[0].ProducerSubtask
-					outputArtifactKey = artifactSelectors[0].OutputArtifactKey
-					glog.V(4).Info("subTaskName: ", subTaskName)
-					glog.V(4).Info("outputArtifactKey: ", outputArtifactKey)
-					currentSubTask := tasks[subTaskName]
-					// If the sub-task is a DAG, reassign currentTask and run
-					// through the loop again.
-					currentTask = currentSubTask
-					// }
-				} else {
-					// Base case, subtask is a container, not a DAG.
-					outputs, err := mlmd.GetOutputArtifactsByExecutionId(ctx, currentTask.GetID())
-					if err != nil {
-						return nil, artifactError(err)
-					}
-					glog.V(4).Infof("outputs: %#v", outputs)
-					artifact, ok := outputs[outputArtifactKey]
-					if !ok {
-						return nil, artifactError(fmt.Errorf("cannot find output artifact key %q in producer task %q", taskOutput.GetOutputArtifactKey(), taskOutput.GetProducerTask()))
-					}
-					runtimeArtifact, err := artifact.ToRuntimeArtifact()
-					if err != nil {
-						return nil, artifactError(err)
-					}
-					inputs.Artifacts[name] = &pipelinespec.ArtifactList{
-						Artifacts: []*pipelinespec.RuntimeArtifact{runtimeArtifact},
-					}
-					// Since we are in the base case, escape the loop.
-					currentSubTaskMaybeDAG = false
+			outputTaskMapping, err := parseDAGOutputs(tasks, currentTask, "", ctx)
+			if err != nil {
+				return nil, artifactError(err)
+			}
+			glog.V(4).Infof("praseDAGOutput output: %v", outputTaskMapping)
+			for key := range outputTaskMapping {
+				value := outputTaskMapping[key]
+				outputs, err := mlmd.GetOutputArtifactsByExecutionId(ctx, key)
+				if err != nil {
+					return nil, artifactError(err)
+				}
+				glog.V(4).Infof("GetOutputArtifactsByExecutionId output: %#v", outputs)
+				artifact, ok := outputs[value]
+				if !ok {
+					return nil, artifactError(fmt.Errorf("cannot find output artifact key %q in producer task %q", taskOutput.GetOutputArtifactKey(), taskOutput.GetProducerTask()))
+				}
+				runtimeArtifact, err := artifact.ToRuntimeArtifact()
+				glog.V(4).Infof("runtimeArtifact: %#v", runtimeArtifact)
+				glog.V(4).Info("taskID: ", currentTask.GetID())
+				glog.V(4).Info("outputArtifactKey: ", value)
+				if err != nil {
+					return nil, artifactError(err)
+				}
+				inputs.Artifacts[name] = &pipelinespec.ArtifactList{
+					Artifacts: []*pipelinespec.RuntimeArtifact{runtimeArtifact},
 				}
 			}
 		default:
