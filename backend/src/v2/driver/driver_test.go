@@ -17,12 +17,14 @@ import (
 	"encoding/json"
 	"testing"
 
+	"google.golang.org/protobuf/types/known/structpb"
 	k8sres "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kubeflow/pipelines/api/v2alpha1/go/pipelinespec"
 	"github.com/kubeflow/pipelines/backend/src/v2/metadata"
 	"github.com/kubeflow/pipelines/kubernetes_platform/go/kubernetesplatform"
+	"github.com/kubeflow/pipelines/third_party/ml-metadata/go/ml_metadata"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	k8score "k8s.io/api/core/v1"
@@ -1620,4 +1622,101 @@ func Test_extendPodSpecPatch_GenericEphemeralVolume(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.podSpec)
 		})
 	}
+}
+
+func TestResolveUpstreamParametersBase(t *testing.T) {
+	Id := int64(10)
+	Name := "some-name"
+	Type := "system.Execution"
+	CustomProperties := map[string]*ml_metadata.Value{
+		"inputs":  {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("task1")}}}},
+		"outputs": {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"output_key": structpb.NewStringValue("dataset")}}}},
+	}
+	tasks := map[string]*metadata.Execution{"test": metadata.NewExecution(&ml_metadata.Execution{
+		Id:               &Id,
+		Name:             &Name,
+		Type:             &Type,
+		CustomProperties: CustomProperties,
+	})}
+	parameterValueMapping, err := resolveUpstreamParameters(tasks, "test", "output_key")
+	assert.Nil(t, err)
+	assert.Equal(t, parameterValueMapping, structpb.NewStringValue("dataset"))
+	assert.Equal(t, *tasks["test"].GetExecution().Type, "system.Execution")
+}
+
+func TestResolveUpstreamParametersParameters(t *testing.T) {
+	task1ID := int64(10)
+	task1Name := "some-name"
+	task2ID := int64(10)
+	task2Name := "some-name"
+	dagType := "system.DAGExecution"
+	executionType := "system.Execution"
+	subtaskValue, _ := structpb.NewValue("task2")
+	outputParameterKey, _ := structpb.NewValue("dataset2")
+	nestedOutputParameterKey, _ := structpb.NewValue("dataset2")
+	output := structpb.Value{Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"producer_subtask": subtaskValue, "output_parameter_key": outputParameterKey}}}}
+	CustomProperties := map[string]*ml_metadata.Value{
+		"outputs": {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"dataset": &output}}}},
+	}
+	nestedCustomProperties := map[string]*ml_metadata.Value{
+		"outputs": {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"dataset2": nestedOutputParameterKey}}}},
+	}
+	tasks := map[string]*metadata.Execution{
+		"task1": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &task1ID,
+			Name:             &task1Name,
+			Type:             &dagType,
+			CustomProperties: CustomProperties}),
+		"task2": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &task2ID,
+			Name:             &task2Name,
+			Type:             &executionType,
+			CustomProperties: nestedCustomProperties}),
+	}
+	parameterValueMapping, err := resolveUpstreamParameters(tasks, "task1", "dataset")
+	assert.Nil(t, err)
+	assert.Equal(t, parameterValueMapping, nestedOutputParameterKey)
+}
+
+func TestResolveUpstreamParametersMulti(t *testing.T) {
+	taskIDs := []int64{10, 11, 12}
+	taskNames := []string{"task1-name", "task2-name", "task3-name"}
+	dagType, executionType := "system.DAGExecution", "system.Execution"
+	subtaskValues := []*structpb.Value{structpb.NewStringValue("task2"), structpb.NewStringValue("task2")}
+	outputParameterKeys := []*structpb.Value{structpb.NewStringValue("dataset"), structpb.NewStringValue("dataset"), structpb.NewStringValue("dataset2")}
+	output := structpb.Value{Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"producer_subtask": subtaskValues[0], "output_parameter_key": outputParameterKeys[0]}}}}
+	output2 := structpb.Value{Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"producer_subtask": subtaskValues[0], "output_parameter_key": outputParameterKeys[1]}}}}
+	CustomProperties := map[string]*ml_metadata.Value{
+		"outputs": {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"dataset": &output, "dataset2": &output2}}}},
+	}
+	nestedCustomProperties := map[string]*ml_metadata.Value{
+		"outputs": {Value: &ml_metadata.Value_StructValue{StructValue: &structpb.Struct{Fields: map[string]*structpb.Value{"dataset": outputParameterKeys[2]}}}},
+	}
+	tasks := map[string]*metadata.Execution{
+		"task1": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[0],
+			Name:             &taskNames[0],
+			Type:             &dagType,
+			CustomProperties: CustomProperties}),
+		"task2": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[1],
+			Name:             &taskNames[1],
+			Type:             &executionType,
+			CustomProperties: nestedCustomProperties}),
+		"task3": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[2],
+			Name:             &taskNames[2],
+			Type:             &dagType,
+			CustomProperties: CustomProperties,
+		}),
+	}
+	parameterValueMapping, err := resolveUpstreamParameters(tasks, "task1", "dataset")
+	assert.Nil(t, err)
+	assert.Equal(t, parameterValueMapping, outputParameterKeys[2])
+	parameterValueMapping, err = resolveUpstreamParameters(tasks, "task1", "dataset2")
+	assert.Nil(t, err)
+	assert.Equal(t, parameterValueMapping, outputParameterKeys[2])
+	parameterValueMapping, err = resolveUpstreamParameters(tasks, "task3", "dataset")
+	assert.Nil(t, err)
+	assert.Equal(t, parameterValueMapping, outputParameterKeys[2])
 }
