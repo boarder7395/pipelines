@@ -1165,19 +1165,24 @@ func resolveInputs(ctx context.Context, dag *metadata.DAG, iterationIndex *int, 
 
 		// This is the case where the input comes from the output of an upstream task.
 		case *pipelinespec.TaskInputsSpec_InputParameterSpec_TaskOutputParameter:
-			cfg := resolveUpstreamParametersConfig{
-				ctx:        ctx,
-				paramSpec:  paramSpec,
-				dag:        dag,
-				pipeline:   pipeline,
-				mlmd:       mlmd,
-				inputs:     inputs,
-				name:       name,
-				paramError: paramError,
+			outputParameters := paramSpec.GetTaskOutputParameter()
+			producerTask := outputParameters.GetProducerTask()
+			outputParameterKey := outputParameters.GetOutputParameterKey()
+			if producerTask == "" {
+				return nil, paramError(fmt.Errorf("producer task is empty"))
 			}
-			if err := resolveUpstreamParameters(cfg); err != nil {
+			if outputParameterKey == "" {
+				return nil, paramError(fmt.Errorf("output parameter key is empty"))
+			}
+			tasks, err := getDAGTasks(ctx, dag, pipeline, mlmd, nil)
+			if err != nil {
 				return nil, err
 			}
+			parameterValue, err := resolveUpstreamParameters(tasks, producerTask, outputParameterKey)
+			if err != nil {
+				return nil, err
+			}
+			inputs.ParameterValues[name] = parameterValue
 
 		case *pipelinespec.TaskInputsSpec_InputParameterSpec_RuntimeValue:
 			runtimeValue := paramSpec.GetRuntimeValue()
@@ -1236,82 +1241,34 @@ func resolveInputs(ctx context.Context, dag *metadata.DAG, iterationIndex *int, 
 	return inputs, nil
 }
 
-// resolveUpstreamParametersConfig is just a config struct used to store the
-// input parameters of the resolveUpstreamParameters function.
-type resolveUpstreamParametersConfig struct {
-	ctx        context.Context
-	paramSpec  *pipelinespec.TaskInputsSpec_InputParameterSpec
-	dag        *metadata.DAG
-	pipeline   *metadata.Pipeline
-	mlmd       *metadata.Client
-	inputs     *pipelinespec.ExecutorInput_Inputs
-	name       string
-	paramError func(error) error
-}
-
-// resolveUpstreamParameters resolves input parameters that come from upstream
-// tasks. These tasks can be components/containers, which is relatively
-// straightforward, or DAGs, in which case, we need to traverse the graph until
-// we arrive at a component/container (since there can be n nested DAGs).
-func resolveUpstreamParameters(cfg resolveUpstreamParametersConfig) error {
-	taskOutput := cfg.paramSpec.GetTaskOutputParameter()
-	glog.V(4).Info("taskOutput: ", taskOutput)
-	if taskOutput.GetProducerTask() == "" {
-		return cfg.paramError(fmt.Errorf("producer task is empty"))
-	}
-	if taskOutput.GetOutputParameterKey() == "" {
-		return cfg.paramError(fmt.Errorf("output parameter key is empty"))
-	}
-	tasks, err := getDAGTasks(cfg.ctx, cfg.dag, cfg.pipeline, cfg.mlmd, nil)
+// resolveUpstreamParameters is a recursive function that traverses the DAG to get a downstream parameter.
+func resolveUpstreamParameters(tasks map[string]*metadata.Execution, taskName string, outputParameterKey string) (parameterValue *structpb.Value, err error) {
+	upstreamTask := tasks[taskName]
+	_, outputParametersCustomProperty, err := upstreamTask.GetParameters()
 	if err != nil {
-		return cfg.paramError(err)
+		return nil, err
 	}
-
-	// The producer is the task that produces the output that we need to
-	// consume.
-	producer := tasks[taskOutput.GetProducerTask()]
-	outputParameterKey := taskOutput.GetOutputParameterKey()
-	glog.V(4).Info("producer: ", producer)
-	currentTask := producer
-	currentSubTaskMaybeDAG := true
-	// Continue looping until we reach a sub-task that is NOT a DAG.
-	for currentSubTaskMaybeDAG {
-		glog.V(4).Info("currentTask: ", currentTask.TaskName())
-		_, outputParametersCustomProperty, err := currentTask.GetParameters()
+	if *upstreamTask.GetExecution().Type == "system.DAGExecution" {
+		// recurse
+		var outputParametersMap map[string]string
+		b, err := outputParametersCustomProperty[outputParameterKey].GetStructValue().MarshalJSON()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		// If the current task is a DAG:
-		if *currentTask.GetExecution().Type == "system.DAGExecution" {
-			// Since currentTask is a DAG, we need to deserialize its
-			// output parameter map so that we can look its
-			// corresponding producer sub-task, reassign currentTask,
-			// and iterate through this loop again.
-			var outputParametersMap map[string]string
-			b, err := outputParametersCustomProperty[outputParameterKey].GetStructValue().MarshalJSON()
-			if err != nil {
-				return err
-			}
-			json.Unmarshal(b, &outputParametersMap)
-			glog.V(4).Info("Deserialized outputParametersMap: ", outputParametersMap)
-			subTaskName := outputParametersMap["producer_subtask"]
-			outputParameterKey = outputParametersMap["output_parameter_key"]
-			glog.V(4).Infof(
-				"Overriding currentTask, %v, output with currentTask's producer_subtask, %v, output.",
-				currentTask.TaskName(),
-				subTaskName,
-			)
-
-			// Reassign sub-task before running through the loop again.
-			currentTask = tasks[subTaskName]
-		} else {
-			cfg.inputs.ParameterValues[cfg.name] = outputParametersCustomProperty[outputParameterKey]
-			// Exit the loop.
-			currentSubTaskMaybeDAG = false
+		json.Unmarshal(b, &outputParametersMap)
+		glog.V(4).Info("Deserialized outputParametersMap: ", outputParametersMap)
+		nextTask := outputParametersMap["producer_subtask"]
+		outputParameterKey = outputParametersMap["output_parameter_key"]
+		downstreamParameterMapping, err := resolveUpstreamParameters(tasks, nextTask, outputParameterKey)
+		if err != nil {
+			return nil, err
 		}
+		return downstreamParameterMapping, nil
+	} else {
+		// base case
+		return outputParametersCustomProperty[outputParameterKey], nil
 	}
 
-	return nil
 }
 
 // resolveUpstreamArtifactsConfig is just a config struct used to store the
