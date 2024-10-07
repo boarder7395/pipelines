@@ -18,12 +18,13 @@ package objectstore
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/golang/glog"
 	"os"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/golang/glog"
 )
 
 // The endpoint uses Kubernetes service DNS name with namespace:
@@ -228,6 +229,9 @@ func StructuredS3Params(p map[string]string) (*S3Params, error) {
 			return nil, err
 		}
 		sparams.ForcePathStyle = boolVal
+	} else {
+		// Default to true if not specified, added for backwards compatibilty.
+		sparams.ForcePathStyle = true
 	}
 	return sparams, nil
 }
