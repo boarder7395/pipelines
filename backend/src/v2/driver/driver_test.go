@@ -14,6 +14,7 @@
 package driver
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -1719,4 +1720,94 @@ func TestResolveUpstreamParametersMulti(t *testing.T) {
 	parameterValueMapping, err = resolveUpstreamParameters(tasks, "task3", "dataset")
 	assert.Nil(t, err)
 	assert.Equal(t, parameterValueMapping, outputParameterKeys[2])
+}
+
+type mlmdMock struct{}
+
+func (*mlmdMock) GetOutputArtifactsByExecutionId(ctx context.Context, executionId int64) (map[string]*metadata.OutputArtifact, error) {
+	name := "TestArtifact"
+	output_artifact := metadata.OutputArtifact{Name: "dataset2", Artifact: &ml_metadata.Artifact{Name: &name}}
+	return map[string]*metadata.OutputArtifact{"dataset2": &output_artifact}, nil
+}
+
+func TestResolveUpstreamArtifacts(t *testing.T) {
+	ctx := context.Background()
+	mlmd := &mlmdMock{}
+	assert.NotNil(t, ctx)
+	assert.NotNil(t, mlmd)
+	taskIDs := []int64{10, 11, 12}
+	taskNames := []string{"task1-name", "task2-name", "task3-name"}
+	dagType, executionType := "system.DAGExecution", "system.Execution"
+	outputArtifacts := structpb.Value_StructValue{
+		StructValue: &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"artifact_selectors": {
+					Kind: &structpb.Value_ListValue{
+						ListValue: &structpb.ListValue{
+							Values: []*structpb.Value{
+								{Kind: &structpb.Value_StructValue{
+									StructValue: &structpb.Struct{
+										Fields: map[string]*structpb.Value{
+											"producer_subtask":    structpb.NewStringValue("writer"),
+											"output_artifact_key": structpb.NewStringValue("dataset"),
+										},
+									},
+								}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	outputWrap := ml_metadata.Value_StructValue{
+		StructValue: &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"Output": {Kind: &outputArtifacts},
+			},
+		},
+	}
+	test := ml_metadata.Value_StringValue{
+		StringValue: outputWrap.StructValue.String(),
+	}
+	CustomProperties := map[string]*ml_metadata.Value{
+		"output_artifacts": {Value: &test},
+	}
+	nestedCustomProperties := map[string]*ml_metadata.Value{
+		"output_artifacts": {Value: &test},
+	}
+
+	// {"Output":{"artifact_selectors":[{"producer_subtask":"writer","output_artifact_key":"dataset"}]}}
+
+	// X  struct_value:{fields:{key:"Output"  value:{struct_value:{fields:{key:"artifact_selectors"  value:{list_value:{values:{struct_value:{fields:{key:"output_artifact_key"  value:{string_value:"dataset"}}  fields:{key:"producer_subtask"  value:{string_value:"writer"}}}}}}}}}}}
+	tasks := map[string]*metadata.Execution{
+		"task1": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[0],
+			Name:             &taskNames[0],
+			Type:             &dagType,
+			CustomProperties: CustomProperties}),
+		"task2": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[1],
+			Name:             &taskNames[1],
+			Type:             &executionType,
+			CustomProperties: nestedCustomProperties}),
+		"task3": metadata.NewExecution(&ml_metadata.Execution{
+			Id:               &taskIDs[2],
+			Name:             &taskNames[2],
+			Type:             &dagType,
+			CustomProperties: CustomProperties,
+		}),
+	}
+	output_artifacts := tasks["task1"].GetExecution().GetCustomProperties()["output_artifacts"]
+	t.Log(tasks["task1"].GetExecution().GetCustomProperties()["output_artifacts"])
+	t.Log(output_artifacts.GetStringValue())
+	var toutputArtifacts map[string]*pipelinespec.DagOutputsSpec_DagOutputArtifactSpec
+	err := json.Unmarshal([]byte(output_artifacts.GetStringValue()), &toutputArtifacts)
+	assert.Nil(t, err)
+	t.Log(toutputArtifacts)
+
+	// runtimeArtifact, err := resolveUpstreamArtifacts(ctx, tasks, "task1", "dataset", mlmd)
+	// assert.Nil(t, err)
+	// assert.Equal(t, "TestArtifact", runtimeArtifact.GetName())
+
 }
