@@ -319,7 +319,7 @@ func executeV2(
 		return nil, nil, err
 	}
 	// TODO(Bobgy): should we log metadata per each artifact, or batched after uploading all artifacts.
-	outputArtifacts, err := uploadOutputArtifacts(ctx, executorInput, executorOutput, uploadOutputArtifactsOptions{
+	outputArtifacts, err := uploadOutputArtifacts(ctx, executorInput, executorOutput, bucketConfig, uploadOutputArtifactsOptions{
 		bucketConfig:   bucketConfig,
 		bucket:         bucket,
 		metadataClient: metadataClient,
@@ -415,7 +415,7 @@ type uploadOutputArtifactsOptions struct {
 	metadataClient metadata.ClientInterface
 }
 
-func uploadOutputArtifacts(ctx context.Context, executorInput *pipelinespec.ExecutorInput, executorOutput *pipelinespec.ExecutorOutput, opts uploadOutputArtifactsOptions) ([]*metadata.OutputArtifact, error) {
+func uploadOutputArtifacts(ctx context.Context, executorInput *pipelinespec.ExecutorInput, executorOutput *pipelinespec.ExecutorOutput, bucketConfig *objectstore.Config, opts uploadOutputArtifactsOptions) ([]*metadata.OutputArtifact, error) {
 	// Register artifacts with MLMD.
 	outputArtifacts := make([]*metadata.OutputArtifact, 0, len(executorInput.GetOutputs().GetArtifacts()))
 	for name, artifactList := range executorInput.GetOutputs().GetArtifacts() {
@@ -430,6 +430,22 @@ func uploadOutputArtifacts(ctx context.Context, executorInput *pipelinespec.Exec
 			mergeRuntimeArtifacts(list.Artifacts[0], outputArtifact)
 		}
 
+		// TODO: Getting aws tags from output metadata. Is there a better way to convert map[string]interface{} to map[string]string?
+		outputMetadata := outputArtifact.GetMetadata()
+		glog.Infof("Artifact metadata: %#v", outputMetadata)
+		awsTags, ok := outputMetadata.AsMap()["aws-tags"]
+		if !ok {
+			glog.Warningf("Output Artifact %q does not have aws-tags metadata", name)
+		}
+		tags := make(map[string]string)
+		for k, v := range awsTags.(map[string]interface{}) {
+			if strValue, ok := v.(string); ok {
+				tags[k] = strValue
+			} else {
+				glog.Warningf("Output Artifact %q aws-tags metadata is not a map[string]string: %#v", name, awsTags)
+			}
+		}
+
 		// Upload artifacts from local path to remote storages.
 		localDir, err := localPathForURI(outputArtifact.Uri)
 		if err != nil {
@@ -439,7 +455,7 @@ func uploadOutputArtifacts(ctx context.Context, executorInput *pipelinespec.Exec
 			if err != nil {
 				return nil, fmt.Errorf("failed to upload output artifact %q: %w", name, err)
 			}
-			if err := objectstore.UploadBlob(ctx, opts.bucket, localDir, blobKey); err != nil {
+			if err := objectstore.UploadBlob(ctx, opts.bucket, localDir, blobKey, bucketConfig, tags); err != nil {
 				//  We allow components to not produce output files
 				if errors.Is(err, os.ErrNotExist) {
 					glog.Warningf("Local filepath %q does not exist", localDir)
