@@ -18,12 +18,13 @@ package objectstore
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/golang/glog"
 	"os"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/golang/glog"
 )
 
 // The endpoint uses Kubernetes service DNS name with namespace:
