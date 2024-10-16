@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/golang/glog"
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/gcsblob"
@@ -82,18 +83,22 @@ func OpenBucket(ctx context.Context, k8sClient kubernetes.Interface, namespace s
 		bucketURL = strings.Replace(bucketURL, "minio://", "s3://", 1)
 	}
 
+	bucket, err = blob.OpenBucket(ctx, bucketURL)
+	if err != nil {
+		return nil, nil, err
+	}
 	// When no provider config is provided, or "FromEnv" is specified, use default credentials from the environment
-	return blob.OpenBucket(ctx, bucketURL)
+	return bucket, nil, nil
 }
 
-func UploadBlob(ctx context.Context, bucket *blob.Bucket, localPath, blobPath string) error {
+func UploadBlob(ctx context.Context, bucket *blob.Bucket, localPath, blobPath string, bucketConfig *Config, awsTags map[string]string) error {
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
 		return fmt.Errorf("unable to stat local filepath %q: %w", localPath, err)
 	}
 
 	if !fileInfo.IsDir() {
-		return uploadFile(ctx, bucket, localPath, blobPath)
+		return uploadFile(ctx, bucket, localPath, blobPath, bucketConfig, awsTags)
 	}
 
 	// localPath is a directory.
@@ -104,14 +109,14 @@ func UploadBlob(ctx context.Context, bucket *blob.Bucket, localPath, blobPath st
 
 	for _, f := range files {
 		if f.IsDir() {
-			err = UploadBlob(ctx, bucket, filepath.Join(localPath, f.Name()), blobPath+"/"+f.Name())
+			err = UploadBlob(ctx, bucket, filepath.Join(localPath, f.Name()), blobPath+"/"+f.Name(), bucketConfig, awsTags)
 			if err != nil {
 				return err
 			}
 		} else {
 			blobFilePath := filepath.Join(blobPath, filepath.Base(f.Name()))
 			localFilePath := filepath.Join(localPath, f.Name())
-			if err := uploadFile(ctx, bucket, localFilePath, blobFilePath); err != nil {
+			if err := uploadFile(ctx, bucket, localFilePath, blobFilePath, bucketConfig, awsTags); err != nil {
 				return err
 			}
 		}
@@ -150,12 +155,18 @@ func DownloadBlob(ctx context.Context, bucket *blob.Bucket, localDir, blobDir st
 	return nil
 }
 
-func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFilePath string) error {
+func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFilePath string, bucketConfig *Config, awsTags map[string]string) error {
 	errorF := func(err error) error {
 		return fmt.Errorf("uploadFile(): unable to complete copying %q to remote storage %q: %w", localFilePath, blobFilePath, err)
 	}
 
-	w, err := bucket.NewWriter(ctx, blobFilePath, nil)
+	glog.Infof("Adding Tag: %#v", map[string]string{"TKRetention": "works"})
+	writerOptions := &blob.WriterOptions{
+		Metadata: map[string]string{"TKRetention": "works"},
+		// Tagging:  string{"tkalbach=works&testing=true"},
+	}
+
+	w, err := bucket.NewWriter(ctx, blobFilePath, writerOptions)
 	if err != nil {
 		return errorF(fmt.Errorf("unable to open writer for bucket: %w", err))
 	}
@@ -172,6 +183,31 @@ func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFil
 
 	if err = w.Close(); err != nil {
 		return errorF(fmt.Errorf("failed to close Writer for bucket: %w", err))
+	}
+
+	// Adding Hack to get tags.
+	glog.Info("Adding tags to S3 object")
+	glog.Infof("Bucket URL: %#v", bucketConfig.bucketURL())
+	// TODO: Only run if the bucket is s3. Determine condition for this.
+	// TODO: Check if Must can solve the issue if I pass the session through.
+	mySession := session.Must(session.NewSession())
+	// TODO: Is region required. I should look how they do this with google blob Bucket.
+	s3Client := s3.New(mySession)
+	glog.Info("Creating Client", s3Client)
+
+	S3B := S3Bucket{client: s3Client, bucket: bucketConfig.BucketName, key: bucketConfig.Prefix + blobFilePath}
+	glog.Info("Calling AddTags")
+	tags := []*s3.Tag{}
+	for k, v := range awsTags {
+		glog.Infof("Adding Tag: %#v", map[string]string{k: v})
+		tags = append(tags, &s3.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	err = S3B.AddTags(ctx, tags)
+	if err != nil {
+		return errorF(fmt.Errorf("unable to add tags to S3 object: %w", err))
 	}
 
 	glog.Infof("uploadFile(localFilePath=%q, blobFilePath=%q)", localFilePath, blobFilePath)
@@ -245,6 +281,7 @@ func createS3BucketSession(ctx context.Context, namespace string, sessionInfo *S
 		return nil, nil
 	}
 	config := &aws.Config{}
+	glog.Infof("sessionInfo.Params: %#v", sessionInfo.Params)
 	params, err := StructuredS3Params(sessionInfo.Params)
 	if err != nil {
 		return nil, err
@@ -273,6 +310,7 @@ func createS3BucketSession(ctx context.Context, namespace string, sessionInfo *S
 		config.Endpoint = aws.String(params.Endpoint)
 	}
 
+	glog.Infof("config: %#v", config)
 	sess, err := session.NewSession(config)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create object store session, %v", err)
