@@ -85,10 +85,10 @@ func OpenBucket(ctx context.Context, k8sClient kubernetes.Interface, namespace s
 
 	bucket, err = blob.OpenBucket(ctx, bucketURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// When no provider config is provided, or "FromEnv" is specified, use default credentials from the environment
-	return bucket, nil, nil
+	return bucket, nil
 }
 
 func UploadBlob(ctx context.Context, bucket *blob.Bucket, localPath, blobPath string, bucketConfig *Config, awsTags map[string]string) error {
