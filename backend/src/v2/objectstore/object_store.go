@@ -180,29 +180,31 @@ func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFil
 		return errorF(fmt.Errorf("failed to close Writer for bucket: %w", err))
 	}
 
-	// Adding Hack to get tags.
-	glog.Info("Adding tags to S3 object")
-	glog.Infof("Bucket URL: %#v", bucketConfig.bucketURL())
-	// TODO: Only run if the bucket is s3. Determine condition for this.
-	// TODO: Check if Must can solve the issue if I pass the session through.
-	mySession := session.Must(session.NewSession())
-	// TODO: Is region required. I should look how they do this with google blob Bucket.
-	s3Client := s3.New(mySession)
-	glog.Info("Creating Client", s3Client)
+	if len(awsTags) > 0 {
+		// Adding Hack to get tags.
+		glog.Info("Adding tags to S3 object")
+		glog.Infof("Bucket URL: %#v", bucketConfig.bucketURL())
+		// TODO: Only run if the bucket is s3. Determine condition for this.
+		// TODO: Check if Must can solve the issue if I pass the session through.
+		mySession := session.Must(session.NewSession())
+		// TODO: Is region required. I should look how they do this with google blob Bucket.
+		s3Client := s3.New(mySession)
+		glog.Info("Creating Client", s3Client)
 
-	S3B := S3Bucket{client: s3Client, bucket: bucketConfig.BucketName, key: bucketConfig.Prefix + blobFilePath}
-	glog.Info("Calling AddTags")
-	tags := []*s3.Tag{}
-	for k, v := range awsTags {
-		glog.Infof("Adding Tag: %#v", map[string]string{k: v})
-		tags = append(tags, &s3.Tag{
-			Key:   aws.String(k),
-			Value: aws.String(v),
-		})
-	}
-	err = S3B.AddTags(ctx, tags)
-	if err != nil {
-		return errorF(fmt.Errorf("unable to add tags to S3 object: %w", err))
+		S3B := S3Bucket{client: s3Client, bucket: bucketConfig.BucketName, key: bucketConfig.Prefix + blobFilePath}
+		glog.Info("Calling AddTags")
+		tags := []*s3.Tag{}
+		for k, v := range awsTags {
+			glog.Infof("Adding Tag: %#v", map[string]string{k: v})
+			tags = append(tags, &s3.Tag{
+				Key:   aws.String(k),
+				Value: aws.String(v),
+			})
+		}
+		err = S3B.AddTags(ctx, tags)
+		if err != nil {
+			return errorF(fmt.Errorf("unable to add tags to S3 object: %w", err))
+		}
 	}
 
 	glog.Infof("uploadFile(localFilePath=%q, blobFilePath=%q)", localFilePath, blobFilePath)
