@@ -155,9 +155,9 @@ func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFil
 		return fmt.Errorf("uploadFile(): unable to complete copying %q to remote storage %q: %w", localFilePath, blobFilePath, err)
 	}
 
-	glog.Infof("Adding Tag: %#v", map[string]string{"TKRetention": "works"})
 	writerOptions := &blob.WriterOptions{
 		Metadata: map[string]string{"TKRetention": "works"},
+		// TODO: This is the ideal solution but not supported by blob yet.
 		// Tagging:  string{"tkalbach=works&testing=true"},
 	}
 
