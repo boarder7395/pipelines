@@ -434,15 +434,16 @@ func uploadOutputArtifacts(ctx context.Context, executorInput *pipelinespec.Exec
 		outputMetadata := outputArtifact.GetMetadata()
 		glog.Infof("Artifact metadata: %#v", outputMetadata)
 		awsTags, ok := outputMetadata.AsMap()["aws-tags"]
+		tags := make(map[string]string)
 		if !ok {
 			glog.Warningf("Output Artifact %q does not have aws-tags metadata", name)
-		}
-		tags := make(map[string]string)
-		for k, v := range awsTags.(map[string]interface{}) {
-			if strValue, ok := v.(string); ok {
-				tags[k] = strValue
-			} else {
-				glog.Warningf("Output Artifact %q aws-tags metadata is not a map[string]string: %#v", name, awsTags)
+		} else {
+			for k, v := range awsTags.(map[string]interface{}) {
+				if strValue, ok := v.(string); ok {
+					tags[k] = strValue
+				} else {
+					glog.Warningf("Output Artifact %q aws-tags metadata is not a map[string]string: %#v", name, awsTags)
+				}
 			}
 		}
 

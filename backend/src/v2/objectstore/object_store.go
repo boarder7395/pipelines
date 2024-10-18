@@ -82,13 +82,7 @@ func OpenBucket(ctx context.Context, k8sClient kubernetes.Interface, namespace s
 	if len(config.QueryString) > 0 && strings.HasPrefix(bucketURL, "minio://") {
 		bucketURL = strings.Replace(bucketURL, "minio://", "s3://", 1)
 	}
-
-	bucket, err = blob.OpenBucket(ctx, bucketURL)
-	if err != nil {
-		return nil, nil, err
-	}
-	// When no provider config is provided, or "FromEnv" is specified, use default credentials from the environment
-	return bucket, nil, nil
+	return blob.OpenBucket(ctx, bucketURL)
 }
 
 func UploadBlob(ctx context.Context, bucket *blob.Bucket, localPath, blobPath string, bucketConfig *Config, awsTags map[string]string) error {
@@ -205,11 +199,14 @@ func uploadFile(ctx context.Context, bucket *blob.Bucket, localFilePath, blobFil
 			Value: aws.String(v),
 		})
 	}
-	err = S3B.AddTags(ctx, tags)
-	if err != nil {
-		return errorF(fmt.Errorf("unable to add tags to S3 object: %w", err))
+	if len(tags) == 0 {
+		glog.Info("No tags to add.")
+	} else {
+		err = S3B.AddTags(ctx, tags)
+		if err != nil {
+			return errorF(fmt.Errorf("unable to add tags to S3 object: %w", err))
+		}
 	}
-
 	glog.Infof("uploadFile(localFilePath=%q, blobFilePath=%q)", localFilePath, blobFilePath)
 	return nil
 }
